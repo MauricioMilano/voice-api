@@ -51,13 +51,15 @@ app.add_middleware(RequestContextMiddleware)
 
 @app.on_event("startup")
 def on_startup() -> None:
-    Base.metadata.create_all(bind=engine)
-    Path("./data").mkdir(parents=True, exist_ok=True)
+    from .database import engine as _engine
+    Base.metadata.create_all(bind=_engine)
     _log.info(
         "startup complete",
         extra={
             "service": settings.app_name,
             "database": settings.database_url,
+            "database_resolved": settings.resolved_database_url,
+            "data_dir": settings.data_dir,
             "sidecar": settings.sidecar_base_url,
             "stt_model": settings.stt_model,
             "log_level": os.getenv("LOG_LEVEL", "INFO"),

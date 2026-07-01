@@ -13,7 +13,10 @@ services:
       APP_NAME: "VoiceAPI Gateway"
       SECRET_KEY: "${SECRET_KEY:-change-me-please-make-this-32-chars-min}"
       ACCESS_TOKEN_EXPIRE_MINUTES: "1440"
-      DATABASE_URL: "sqlite:///./data/voice_api.db"
+      # Where the SQLite DB lives. The volume ./data is mounted at /app/data.
+      DATA_DIR: "/app/data"
+      # Absolute path so it works regardless of which directory uvicorn launches from.
+      DATABASE_URL: "sqlite:////app/data/voice_api.db"
       SIDECAR_BASE_URL: "http://127.0.0.1:8001"
       SIDECAR_TIMEOUT_SECONDS: "180"
       CORS_ORIGINS: "http://localhost:8080,http://127.0.0.1:8080"
