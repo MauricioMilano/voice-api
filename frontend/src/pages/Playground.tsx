@@ -24,12 +24,27 @@ export default function Playground() {
       const rec = new MediaRecorder(stream, { mimeType: 'audio/webm' })
       chunksRef.current = []
       rec.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data) }
-      rec.onstop = () => {
+      rec.onstop = async () => {
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' })
+        // Debug log: confirma no console que o blob tem bytes reais
+        console.log('[playground] recorded blob size:', blob.size, 'bytes,', chunksRef.current.length, 'chunks')
+        // O webm do MediaRecorder geralmente nao grava duracao no container EBML,
+        // entao <audio> mostra 0:00. Decodifica via Web Audio API pra extrair a duracao real.
+        try {
+          const ctx = new AudioContext()
+          const buf = await blob.arrayBuffer()
+          const decoded = await ctx.decodeAudioData(buf)
+          console.log('[playground] real duration:', decoded.duration.toFixed(2), 's')
+          ctx.close()
+        } catch (decErr) {
+          console.warn('[playground] could not decode for duration:', decErr)
+        }
         setAudioURL(URL.createObjectURL(blob))
         stream.getTracks().forEach(t => t.stop())
       }
-      rec.start()
+      // timeslice=100ms: emite chunks periodicamente (evita race com onstop,
+      // funciona no Safari, e em alguns browsers inclui metadados de duracao)
+      rec.start(100)
       mediaRef.current = rec
       setRecording(true)
     } catch (e: any) {
