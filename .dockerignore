@@ -1,0 +1,10 @@
+**/__pycache__
+**/.venv
+**/node_modules
+**/.git
+**/.next
+**/dist
+**/.cache
+data/
+sidecar-data/
+.env

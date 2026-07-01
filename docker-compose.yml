@@ -1,0 +1,34 @@
+services:
+  voice-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: voice-api:latest
+    container_name: voice-api
+    restart: unless-stopped
+    ports:
+      - "8080:8080"   # gateway + dashboard UI
+      - "8001:8001"   # sidecar (exposed for debugging / direct calls)
+    environment:
+      APP_NAME: "VoiceAPI Gateway"
+      SECRET_KEY: "${SECRET_KEY:-change-me-please-make-this-32-chars-min}"
+      ACCESS_TOKEN_EXPIRE_MINUTES: "1440"
+      DATABASE_URL: "sqlite:///./data/voice_api.db"
+      SIDECAR_BASE_URL: "http://127.0.0.1:8001"
+      SIDECAR_TIMEOUT_SECONDS: "180"
+      CORS_ORIGINS: "http://localhost:8080,http://127.0.0.1:8080"
+      STT_MODEL: "whisper-large-v3-turbo"
+      # CUDA passthrough — leave commented if no GPU
+      # NVIDIA_VISIBLE_DEVICES: all
+      # NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - ./data:/app/data
+      - ./sidecar-data/voices:/app/sidecar/voices
+    # For NVIDIA GPU acceleration, uncomment the deploy section:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]

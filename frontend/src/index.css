@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body, #root { height: 100%; }
+  body { font-family: theme('fontFamily.sans'); }
+  ::selection { background: theme('colors.accent.500'); color: white; }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2
+           text-sm font-medium transition focus:outline-none
+           focus-visible:ring-2 focus-visible:ring-accent-500;
+  }
+  .btn-primary {
+    @apply btn bg-accent-600 text-white hover:bg-accent-500 shadow-glow;
+  }
+  .btn-secondary {
+    @apply btn bg-ink-700 text-zinc-100 hover:bg-ink-600 border border-ink-600;
+  }
+  .btn-danger {
+    @apply btn bg-red-600/90 text-white hover:bg-red-600;
+  }
+  .input {
+    @apply w-full rounded-lg bg-ink-800 border border-ink-600 px-3 py-2
+           text-sm text-zinc-100 placeholder-zinc-500
+           focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-accent-500;
+  }
+  .label {
+    @apply block text-xs font-medium uppercase tracking-wider text-zinc-400 mb-1.5;
+  }
+  .card {
+    @apply rounded-xl border border-ink-700 bg-ink-900/60 p-5;
+  }
+  .pill {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5
+           text-xs font-medium border;
+  }
+  .pill-green  { @apply pill bg-emerald-500/10 text-emerald-300 border-emerald-500/30; }
+  .pill-red    { @apply pill bg-red-500/10    text-red-300     border-red-500/30; }
+  .pill-zinc   { @apply pill bg-zinc-500/10   text-zinc-300    border-zinc-500/30; }
+  .pill-accent { @apply pill bg-accent-500/10 text-accent-400  border-accent-500/30; }
+}
