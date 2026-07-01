@@ -1,15 +1,21 @@
+"""API Key CRUD endpoints (dashboard)."""
+from __future__ import annotations
+import logging
 from datetime import datetime
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from ..auth_deps import get_current_user
 from ..database import get_db
+from ..middleware import current_request_id, get_client_ip
 from ..models import ApiKey, User
 from ..schemas import ApiKeyCreate, ApiKeyCreated, ApiKeyOut
 from ..security import generate_api_key
 
 router = APIRouter(prefix="/keys", tags=["api-keys"])
+_log = logging.getLogger("keys")
 
 
 def _to_out(row: ApiKey, full_key=None):
@@ -32,7 +38,8 @@ def list_keys(user: User = Depends(get_current_user), db: Session = Depends(get_
 
 
 @router.post("", response_model=ApiKeyCreated, status_code=status.HTTP_201_CREATED)
-def create_key(body: ApiKeyCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def create_key(body: ApiKeyCreate, request: Request,
+               user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     full, prefix, hashed = generate_api_key()
     scopes_csv = ",".join(s.strip() for s in body.scopes if s.strip())
     row = ApiKey(
@@ -41,22 +48,40 @@ def create_key(body: ApiKeyCreate, user: User = Depends(get_current_user), db: S
         expires_at=body.expires_at, is_active=True,
     )
     db.add(row); db.commit(); db.refresh(row)
+    _log.info(
+        "api key created",
+        extra={
+            "key_id": row.id, "key_name": row.name, "key_prefix": row.prefix,
+            "scopes": scopes_csv, "owner_id": user.id,
+            "ip": get_client_ip(request), "request_id": current_request_id(),
+        },
+    )
     return _to_out(row, full_key=full)
 
 
 @router.delete("/{key_id}", status_code=status.HTTP_204_NO_CONTENT)
-def revoke_key(key_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def revoke_key(key_id: int, request: Request,
+               user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     row = db.query(ApiKey).filter(ApiKey.id == key_id, ApiKey.owner_id == user.id).first()
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "API key not found")
     row.is_active = False
     row.revoked_at = datetime.utcnow()
     db.commit()
+    _log.info(
+        "api key revoked",
+        extra={
+            "key_id": row.id, "key_name": row.name, "key_prefix": row.prefix,
+            "owner_id": user.id,
+            "ip": get_client_ip(request), "request_id": current_request_id(),
+        },
+    )
     return None
 
 
 @router.post("/{key_id}/rotate", response_model=ApiKeyCreated)
-def rotate_key(key_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def rotate_key(key_id: int, request: Request,
+               user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     row = db.query(ApiKey).filter(ApiKey.id == key_id, ApiKey.owner_id == user.id).first()
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "API key not found")
@@ -69,4 +94,13 @@ def rotate_key(key_id: int, user: User = Depends(get_current_user), db: Session 
         expires_at=row.expires_at, is_active=True,
     )
     db.add(new_row); db.commit(); db.refresh(new_row)
+    _log.info(
+        "api key rotated",
+        extra={
+            "old_key_id": row.id, "new_key_id": new_row.id,
+            "key_name": new_row.name, "key_prefix": new_row.prefix,
+            "owner_id": user.id,
+            "ip": get_client_ip(request), "request_id": current_request_id(),
+        },
+    )
     return _to_out(new_row, full_key=full)

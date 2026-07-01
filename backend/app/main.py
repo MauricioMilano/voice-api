@@ -1,19 +1,28 @@
+"""FastAPI entrypoint. Serves dashboard API + voice API + (optional) static React UI."""
+from __future__ import annotations
 import logging
+import os
 from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from .config import get_settings
 from .database import Base, engine
+from .logging_config import configure_logging, get_logger
+from .middleware import RequestContextMiddleware
 from .routes import auth as auth_routes
 from .routes import keys as keys_routes
 from .routes import usage as usage_routes
 from .routes import voice as voice_routes
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s — %(message)s")
+# Configure logging BEFORE anything else uses it
+configure_logging()
+
 settings = get_settings()
+_log = get_logger("app")
 
 app = FastAPI(
     title=settings.app_name,
@@ -27,6 +36,7 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+# CORS — must come before our middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list or ["*"],
@@ -35,12 +45,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Request context + access logging
+app.add_middleware(RequestContextMiddleware)
+
 
 @app.on_event("startup")
 def on_startup() -> None:
     Base.metadata.create_all(bind=engine)
     Path("./data").mkdir(parents=True, exist_ok=True)
-    logging.getLogger(__name__).info("Database schema ready (%s)", settings.database_url)
+    _log.info(
+        "startup complete",
+        extra={
+            "service": settings.app_name,
+            "database": settings.database_url,
+            "sidecar": settings.sidecar_base_url,
+            "stt_model": settings.stt_model,
+            "log_level": os.getenv("LOG_LEVEL", "INFO"),
+            "log_format": os.getenv("LOG_FORMAT", "text"),
+        },
+    )
+
+
+@app.on_event("shutdown")
+def on_shutdown() -> None:
+    _log.info("shutdown complete")
 
 
 @app.get("/api/meta", tags=["meta"])
@@ -64,6 +92,7 @@ if STATIC_DIR.exists():
     assets_dir = STATIC_DIR / "assets"
     if assets_dir.exists():
         app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+    _log.info("static frontend mounted", extra={"path": str(STATIC_DIR)})
 
     @app.get("/", include_in_schema=False)
     @app.get("/{full_path:path}", include_in_schema=False)
@@ -74,4 +103,6 @@ if STATIC_DIR.exists():
         index = STATIC_DIR / "index.html"
         if index.is_file():
             return FileResponse(str(index))
-        return {"detail": "frontend not built"}
+        return JSONResponse({"detail": "frontend not built"}, status_code=404)
+else:
+    _log.warning("static frontend NOT found at %s — only API endpoints available", STATIC_DIR)

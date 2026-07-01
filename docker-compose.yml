@@ -18,13 +18,16 @@ services:
       SIDECAR_TIMEOUT_SECONDS: "180"
       CORS_ORIGINS: "http://localhost:8080,http://127.0.0.1:8080"
       STT_MODEL: "whisper-large-v3-turbo"
-      # CUDA passthrough — leave commented if no GPU
+      # ---- Logging (see README "Troubleshooting") ----
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"          # DEBUG | INFO | WARNING | ERROR
+      LOG_FORMAT: "${LOG_FORMAT:-text}"        # text | json
+      # For NVIDIA GPU acceleration on the whisper sidecar, uncomment:
       # NVIDIA_VISIBLE_DEVICES: all
       # NVIDIA_DRIVER_CAPABILITIES: compute,utility
     volumes:
       - ./data:/app/data
       - ./sidecar-data/voices:/app/sidecar/voices
-    # For NVIDIA GPU acceleration, uncomment the deploy section:
+    # For NVIDIA GPU acceleration, also uncomment the deploy block:
     # deploy:
     #   resources:
     #     reservations:

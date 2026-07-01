@@ -1,19 +1,32 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+"""User registration & login — with structured event logging."""
+from __future__ import annotations
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
+
 from ..auth_deps import get_current_user
 from ..database import get_db
+from ..middleware import current_request_id, get_client_ip
 from ..models import User
 from ..schemas import UserRegister, UserLogin, TokenResponse, UserOut
 from ..security import hash_password, verify_password, create_access_token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+_log = logging.getLogger("auth.events")
 
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-def register(body: UserRegister, db: Session = Depends(get_db)):
+def register(body: UserRegister, request: Request, db: Session = Depends(get_db)):
     existing = db.query(User).filter(User.email == body.email.lower()).first()
     if existing:
+        _log.warning(
+            "registration rejected: email already registered",
+            extra={"email": body.email.lower(), "ip": get_client_ip(request),
+                   "request_id": current_request_id()},
+        )
         raise HTTPException(status.HTTP_409_CONFLICT, "Email already registered")
+
     is_first = db.query(User).count() == 0
     user = User(
         email=body.email.lower(),
@@ -24,16 +37,46 @@ def register(body: UserRegister, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
+
     token, expires = create_access_token(subject=str(user.id), extra={"email": user.email})
+    _log.info(
+        "user registered",
+        extra={
+            "user_id": user.id,
+            "email": user.email,
+            "is_admin": is_first,
+            "ip": get_client_ip(request),
+            "request_id": current_request_id(),
+        },
+    )
     return TokenResponse(access_token=token, expires_in=expires)
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(body: UserLogin, db: Session = Depends(get_db)):
+def login(body: UserLogin, request: Request, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == body.email.lower()).first()
     if not user or not verify_password(body.password, user.hashed_password):
+        _log.warning(
+            "login failed",
+            extra={
+                "email": body.email.lower(),
+                "user_exists": user is not None,
+                "ip": get_client_ip(request),
+                "request_id": current_request_id(),
+            },
+        )
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
+
     token, expires = create_access_token(subject=str(user.id), extra={"email": user.email})
+    _log.info(
+        "login success",
+        extra={
+            "user_id": user.id,
+            "email": user.email,
+            "ip": get_client_ip(request),
+            "request_id": current_request_id(),
+        },
+    )
     return TokenResponse(access_token=token, expires_in=expires)
 
 

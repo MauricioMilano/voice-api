@@ -203,6 +203,119 @@ npm run dev                            # → :5173
 
 ---
 
+
+
+---
+
+## Troubleshooting & logs
+
+The gateway emits structured logs at every interesting moment — startup, every
+HTTP request, auth attempts, sidecar calls, and errors. Two log streams live
+in the container at `/app/logs/`:
+
+- `gateway.log` — gateway process (auth, requests, sidecar calls, errors)
+- `sidecar.log` — voice-chat sidecar (whisper, piper, downloads, model init)
+
+Both are also written to stdout, so `docker compose logs voice-api` shows them
+interleaved.
+
+### Configuring logs
+
+| Env var       | Default | What it does                                       |
+|---------------|---------|----------------------------------------------------|
+| `LOG_LEVEL`   | `INFO`  | `DEBUG` / `INFO` / `WARNING` / `ERROR`             |
+| `LOG_FORMAT`  | `text`  | `text` (human) or `json` (one JSON line per record) |
+| `LOG_FILE`    | unset   | Optional — also tee logs to this path, rotated 20MB×5 |
+
+Set in your shell before `docker compose up`:
+
+```bash
+LOG_LEVEL=DEBUG LOG_FORMAT=json docker compose up
+```
+
+### Quick filters (use `tail-logs.sh`)
+
+The container ships a helper that wraps `tail` + `grep` for the common cases:
+
+```bash
+# From the host:
+docker compose exec voice-api ./scripts/tail-logs.sh              # everything
+docker compose exec voice-api ./scripts/tail-logs.sh errors       # only WARN/ERROR
+docker compose exec voice-api ./scripts/tail-logs.sh stt          # only STT events
+docker compose exec voice-api ./scripts/tail-logs.sh auth        # login / API-key events
+docker compose exec voice-api ./scripts/tail-logs.sh request-id a1b2c3d4  # one request end-to-end
+```
+
+`request-id` is your best friend for debugging a single failure — every log
+line tagged with that ID belongs to the same HTTP call.
+
+### What gets logged
+
+Every log line is one event. In **text** mode:
+
+```
+2026-07-01T12:34:56.789 INFO  [access] request  request_id=a1b2c3d4 method=POST path=/v1/stt status=200 duration_ms=812 client_ip=187.45.10.2 key_prefix='vk_live_5BeldTIvjPw' bytes_in=32044
+2026-07-01T12:34:56.101 INFO  [auth.events] login success  user_id=1 email='demo@test.com' ip='187.45.10.2' request_id=a1b2c3d4
+2026-07-01T12:34:56.300 INFO  [voice] stt request  key_id=2 key_prefix='vk_live_5BeldTIvjPw' audio_bytes=32044 audio_content_type='audio/wav' request_id=a1b2c3d4
+2026-07-01T12:34:57.110 INFO  [sidecar.client] sidecar stt ok  sidecar_url='http://127.0.0.1:8001/stt' status=200 duration_ms=810 bytes_in=32044 text_chars=42 word_count=9
+2026-07-01T12:34:57.115 INFO  [sidecar] sidecar stt ok  op='stt' key_id=2 key_name='prod' key_prefix='vk_live_5BeldTIvjPw' bytes_in=32044 bytes_out=42 duration_ms=815 sidecar_status=200 request_id=a1b2c3d4
+```
+
+In **json** mode the same line is a JSON object — pipe straight into `jq`:
+
+```bash
+docker compose logs voice-api | jq -c 'select(.logger=="sidecar.client")'
+docker compose logs voice-api | jq 'select(.request_id=="a1b2c3d4")'
+docker compose logs voice-api | jq 'select(.status>=500 or .level=="ERROR")'
+```
+
+### Loggers in use
+
+| Logger              | What it logs                                          |
+|---------------------|-------------------------------------------------------|
+| `app`               | Startup / shutdown / static mount state               |
+| `access`            | One line per HTTP request (method, path, status, ms, IP, key prefix, request_id) |
+| `auth`              | Auth dependency events (token failures, key denials, scope denials) |
+| `auth.events`       | Login / register / key create / revoke / rotate outcomes with email + IP |
+| `keys`              | API key CRUD outcomes (id, name, prefix, owner)       |
+| `voice`             | STT/TTS request intake (audio size, voice, etc.)      |
+| `sidecar`           | One log line per forwarded sidecar call (op, bytes, ms, status) |
+| `sidecar.client`    | Raw HTTP layer: URL, status, response preview (first 500 chars on errors) |
+| `uvicorn`           | Standard uvicorn startup messages                     |
+
+### Common failure patterns
+
+| Symptom in logs                                                    | Likely cause                                        |
+|--------------------------------------------------------------------|-----------------------------------------------------|
+| `auth failed  reason='invalid or expired token'`                    | JWT expired (24h default) — user must log in again  |
+| `auth failed  reason='API key not found or inactive'`               | Wrong key, revoked key, or key prefix mismatch      |
+| `auth failed  reason='API key signature mismatch'`                  | Stored hash doesn't match — recreate the key       |
+| `auth failed  reason='API key expired'`                             | `expires_at` set in the past                        |
+| `scope denied  required_scope='stt:transcribe'`                     | Key was created with wrong scope                    |
+| `sidecar stt unreachable  error='ConnectError: All connection…'`    | Sidecar not running yet, or stuck loading model     |
+| `sidecar stt returned error  status=500 response_body_preview='…'`  | Whisper failed on the audio — see sidecar.log       |
+| `request  status=502 duration_ms=15 path=/v1/stt`                  | Gateway reached but sidecar rejected — check sidecar.log for the actual error |
+
+### Persistence
+
+`/app/logs/` lives inside the container — add a volume mount if you want
+logs to survive a `docker compose down`:
+
+```yaml
+volumes:
+  - ./logs:/app/logs    # ← add this
+```
+
+### Disabling the access log
+
+The default is to log every request at INFO. For quieter prod logs:
+
+```bash
+LOG_LEVEL=WARNING docker compose up
+```
+
+You'll still see startup/shutdown and errors, but not the per-request lines.
+
 ## License
 
 Apache-2.0 (matches the voice-chat sidecar).
