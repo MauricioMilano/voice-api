@@ -9,6 +9,8 @@ import ApiKeys from './pages/ApiKeys'
 import Usage from './pages/Usage'
 import Docs from './pages/Docs'
 import Playground from './pages/Playground'
+import Billing from './pages/Billing'
+import AdminCredits from './pages/AdminCredits'
 
 function Protected({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth()
@@ -27,6 +29,8 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/keys" element={<ApiKeys />} />
           <Route path="/usage" element={<Usage />} />
+          <Route path="/billing" element={<Billing />} />
+          <Route path="/admin/credits" element={<AdminCredits />} />
           <Route path="/playground" element={<Playground />} />
           <Route path="/docs" element={<Docs />} />
         </Route>

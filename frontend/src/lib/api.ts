@@ -130,3 +130,83 @@ export const Voice = {
     return data as { text: string; words: { word: string; start: number; end: number; probability: number }[]; model: string; duration: number | null }
   },
 }
+
+
+// ---------- Wallet / Vox ----------
+export interface Wallet {
+  balance_vox: number
+  lifetime_vox_credited: number
+  lifetime_vox_consumed: number
+  updated_at: string
+}
+export interface LedgerEntry {
+  id: number
+  delta_vox: number
+  reason: string
+  ref_table: string | null
+  ref_id: number | null
+  note: string | null
+  balance_after: number
+  request_id: string | null
+  occurred_at: string
+}
+
+export const Wallet = {
+  get: () => request<Wallet>('/api/wallet'),
+  ledger: (limit = 50, offset = 0, reason?: string) => {
+    const p = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+    if (reason) p.set('reason', reason)
+    return request<LedgerEntry[]>(`/api/wallet/ledger?${p.toString()}`)
+  },
+}
+
+// ---------- Admin (grants, user list) ----------
+export interface AdminUser {
+  id: number
+  email: string
+  name: string
+  is_admin: boolean
+  created_at: string
+  balance_vox: number
+  lifetime_vox_credited: number
+  lifetime_vox_consumed: number
+}
+export interface AdminGrant {
+  id: number
+  admin_user_id: number
+  target_user_id: number
+  vox_amount: number
+  note: string | null
+  created_at: string
+}
+export interface AdminBulkGrantResultItem {
+  user_email: string
+  status: 'ok' | 'error'
+  grant_id?: number | null
+  detail?: string | null
+}
+
+export const Admin = {
+  listUsers: () => request<AdminUser[]>('/api/admin/users'),
+  listGrants: (limit = 100) => request<AdminGrant[]>(`/api/admin/grants?limit=${limit}`),
+  grantVox: (user_email: string, vox_amount: number, note?: string) =>
+    request<AdminGrant>('/api/admin/grant', {
+      method: 'POST', body: JSON.stringify({ user_email, vox_amount, note }),
+    }),
+  grantBulk: (grants: { user_email: string; vox_amount: number; note?: string }[]) =>
+    request<{ results: AdminBulkGrantResultItem[] }>('/api/admin/grant/bulk', {
+      method: 'POST', body: JSON.stringify({ grants }),
+    }),
+  adjust: (user_email: string, vox_delta: number, note: string) =>
+    request<{ user_email: string; vox_delta: number; balance_after: number; note: string }>(
+      '/api/admin/adjust', {
+        method: 'POST', body: JSON.stringify({ user_email, vox_delta, note }),
+      }
+    ),
+  getUserLedger: (userId: number, limit = 50, offset = 0) =>
+    request<LedgerEntry[]>(`/api/admin/users/${userId}/ledger?limit=${limit}&offset=${offset}`),
+  globalUsage: (days = 30) => request<{
+    days: number; since: string
+    total_requests: number; total_vox_charged: number; total_units: number
+  }>(`/api/admin/usage?days=${days}`),
+}

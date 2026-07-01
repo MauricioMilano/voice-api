@@ -1,7 +1,8 @@
 """Voice endpoints — STT/TTS, gated by API keys.
 
 Forwards to the voice-chat sidecar running whisper-large-v3-turbo + piper-tts.
-Every sidecar call is logged with request size, response size, duration, and status.
+Every sidecar call is logged with request size, response size, duration, status,
+and the Vox amount charged to the API key owner.
 """
 from __future__ import annotations
 import logging
@@ -17,19 +18,21 @@ from ..middleware import current_request_id
 from ..models import ApiKey, UsageLog
 from ..schemas import SttResponse, TtsResponse, VoicesResponse
 from ..sidecar import SidecarError, get_sidecar
+from .. import wallet as wallet_service
 
 _log = logging.getLogger("voice")
 _sidecar_log = logging.getLogger("sidecar")
+_wallet_log = logging.getLogger("wallet.events")
 
 router = APIRouter(prefix="/v1", tags=["voice"])
 
 
 def _record(db, api_key, endpoint, status_code, duration_ms,
-            bytes_in=0, bytes_out=0, units=0.0, error=None):
+            bytes_in=0, bytes_out=0, units=0.0, vox_charged=0, error=None):
     db.add(UsageLog(
         api_key_id=api_key.id, endpoint=endpoint, status_code=status_code,
         duration_ms=duration_ms, bytes_in=bytes_in, bytes_out=bytes_out,
-        units=units, error=error,
+        units=units, vox_charged=vox_charged, error=error,
     ))
     db.commit()
 
@@ -44,7 +47,6 @@ def _log_sidecar_call(
     status_code: int | None = None,
     error: str | None = None,
 ) -> None:
-    """Structured log line per sidecar call — easy to grep / dashboard."""
     extra = {
         "op": op,
         "key_id": api_key.id,
@@ -61,6 +63,18 @@ def _log_sidecar_call(
         _sidecar_log.error(f"sidecar {op} failed", extra=extra)
     else:
         _sidecar_log.info(f"sidecar {op} ok", extra=extra)
+
+
+def _insufficient_vox_402(balance: int, required: int) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+        detail={
+            "error": "insufficient_vox",
+            "balance_vox": balance,
+            "required_vox": required,
+            "contact_admin": True,
+        },
+    )
 
 
 @router.get("/stt/model")
@@ -87,6 +101,24 @@ async def stt(
         _record(db, api_key, "/v1/stt", 400, duration_ms, error="empty audio")
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Empty audio file")
 
+    # Pre-check: estimate Vox cost vs current balance
+    estimated_vox = wallet_service.estimate_stt_vox(len(audio_bytes))
+    balance = wallet_service.get_balance(db, api_key.owner_id)
+    if balance < estimated_vox:
+        duration_ms = int((time.perf_counter() - t0) * 1000)
+        _log.warning(
+            "stt rejected: insufficient_vox",
+            extra={
+                "key_id": api_key.id, "owner_id": api_key.owner_id,
+                "balance_vox": balance, "estimated_vox": estimated_vox,
+                "audio_bytes": len(audio_bytes),
+                "request_id": current_request_id(),
+            },
+        )
+        _record(db, api_key, "/v1/stt", 402, duration_ms,
+                bytes_in=len(audio_bytes), error="insufficient_vox")
+        raise _insufficient_vox_402(balance, estimated_vox)
+
     _log.info(
         "stt request",
         extra={
@@ -95,6 +127,8 @@ async def stt(
             "audio_bytes": len(audio_bytes),
             "audio_content_type": audio.content_type,
             "audio_filename": audio.filename,
+            "balance_vox": balance,
+            "estimated_vox": estimated_vox,
             "request_id": current_request_id(),
         },
     )
@@ -122,10 +156,34 @@ async def stt(
         except Exception:
             audio_seconds = 0.0
     response_bytes = len(result.get("text", "") or "")
+
+    # Settle: charge actual Vox based on real audio seconds
+    actual_vox = wallet_service.compute_stt_vox(audio_seconds)
+    try:
+        wallet_service.debit(
+            db, api_key.owner_id, actual_vox,
+            wallet_service.REASON_STT_CONSUMPTION,
+            request_id=current_request_id(),
+        )
+    except ValueError as e:
+        # Race condition: balance drained between pre-check and now
+        _wallet_log.error(
+            "stt debit race condition",
+            extra={"key_id": api_key.id, "owner_id": api_key.owner_id,
+                   "actual_vox": actual_vox, "error": str(e),
+                   "request_id": current_request_id()},
+        )
+        _record(db, api_key, "/v1/stt", 402, duration_ms,
+                bytes_in=len(audio_bytes), vox_charged=0,
+                error="insufficient_vox_race")
+        raise _insufficient_vox_402(
+            wallet_service.get_balance(db, api_key.owner_id), actual_vox
+        )
+
     _log_sidecar_call("stt", api_key, bytes_in=len(audio_bytes),
                       bytes_out=response_bytes, duration_ms=duration_ms, status_code=200)
     _record(db, api_key, "/v1/stt", 200, duration_ms,
-            bytes_in=len(audio_bytes), units=audio_seconds)
+            bytes_in=len(audio_bytes), units=audio_seconds, vox_charged=actual_vox)
     return SttResponse(
         text=result.get("text", "") or "",
         words=words,
@@ -154,6 +212,21 @@ async def tts(
         )
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "text too long (max 5000 chars)")
 
+    # Pre-check: estimate Vox cost vs current balance
+    estimated_vox = wallet_service.estimate_tts_vox(len(text))
+    balance = wallet_service.get_balance(db, api_key.owner_id)
+    if balance < estimated_vox:
+        _log.warning(
+            "tts rejected: insufficient_vox",
+            extra={
+                "key_id": api_key.id, "owner_id": api_key.owner_id,
+                "balance_vox": balance, "estimated_vox": estimated_vox,
+                "text_length": len(text),
+                "request_id": current_request_id(),
+            },
+        )
+        raise _insufficient_vox_402(balance, estimated_vox)
+
     t0 = time.perf_counter()
     _log.info(
         "tts request",
@@ -162,6 +235,8 @@ async def tts(
             "key_prefix": api_key.prefix,
             "text_chars": len(text),
             "voice": voice,
+            "balance_vox": balance,
+            "estimated_vox": estimated_vox,
             "request_id": current_request_id(),
         },
     )
@@ -180,10 +255,31 @@ async def tts(
     timings = payload.get("timings") or []
     duration_ms = int((time.perf_counter() - t0) * 1000)
     bytes_out = int(len(audio_b64) * 3 / 4) if audio_b64 else 0
+
+    # Settle: charge actual Vox based on real char count
+    actual_vox = wallet_service.compute_tts_vox(len(text))
+    try:
+        wallet_service.debit(
+            db, api_key.owner_id, actual_vox,
+            wallet_service.REASON_TTS_CONSUMPTION,
+            request_id=current_request_id(),
+        )
+    except ValueError as e:
+        _wallet_log.error(
+            "tts debit race condition",
+            extra={"key_id": api_key.id, "owner_id": api_key.owner_id,
+                   "actual_vox": actual_vox, "error": str(e),
+                   "request_id": current_request_id()},
+        )
+        raise _insufficient_vox_402(
+            wallet_service.get_balance(db, api_key.owner_id), actual_vox
+        )
+
     _log_sidecar_call("tts", api_key, bytes_in=len(text.encode("utf-8")),
                       bytes_out=bytes_out, duration_ms=duration_ms, status_code=200)
     _record(db, api_key, "/v1/tts", 200, duration_ms,
-            bytes_in=len(text.encode("utf-8")), bytes_out=bytes_out, units=float(len(text)))
+            bytes_in=len(text.encode("utf-8")), bytes_out=bytes_out,
+            units=float(len(text)), vox_charged=actual_vox)
     return TtsResponse(
         audio_base64=audio_b64,
         format=payload.get("format", "wav"),

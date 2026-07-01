@@ -13,10 +13,12 @@ from .config import get_settings
 from .database import Base, engine
 from .logging_config import configure_logging, get_logger
 from .middleware import RequestContextMiddleware
+from .routes import admin as admin_routes
 from .routes import auth as auth_routes
 from .routes import keys as keys_routes
 from .routes import usage as usage_routes
 from .routes import voice as voice_routes
+from .routes import wallet as wallet_routes
 
 # Configure logging BEFORE anything else uses it
 configure_logging()
@@ -87,6 +89,8 @@ def healthz():
 app.include_router(auth_routes.router, prefix="/api")
 app.include_router(keys_routes.router, prefix="/api")
 app.include_router(usage_routes.router, prefix="/api")
+app.include_router(wallet_routes.router, prefix="/api")
+app.include_router(admin_routes.router, prefix="/api")
 app.include_router(voice_routes.router)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"

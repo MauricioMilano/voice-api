@@ -96,3 +96,90 @@ class VoicesResponse(BaseModel):
 
 class MessageResponse(BaseModel):
     message: str
+
+
+
+# -----------------------------------------------------------------------------
+# Vox credits
+# -----------------------------------------------------------------------------
+
+class WalletOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    balance_vox: int
+    lifetime_vox_credited: int
+    lifetime_vox_consumed: int
+    updated_at: datetime
+
+
+class LedgerEntryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    delta_vox: int
+    reason: str
+    ref_table: Optional[str] = None
+    ref_id: Optional[int] = None
+    note: Optional[str] = None
+    balance_after: int
+    request_id: Optional[str] = None
+    occurred_at: datetime
+
+
+class AdminGrantCreate(BaseModel):
+    user_email: EmailStr
+    vox_amount: int = Field(gt=0, le=10_000_000)
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
+class AdminBulkGrantItem(BaseModel):
+    user_email: EmailStr
+    vox_amount: int = Field(gt=0, le=10_000_000)
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
+class AdminBulkGrantRequest(BaseModel):
+    grants: List[AdminBulkGrantItem] = Field(min_length=1, max_length=200)
+
+
+class AdminBulkGrantResultItem(BaseModel):
+    user_email: str
+    status: str
+    grant_id: Optional[int] = None
+    detail: Optional[str] = None
+
+
+class AdminBulkGrantResponse(BaseModel):
+    results: List[AdminBulkGrantResultItem]
+
+
+class AdminGrantOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    admin_user_id: int
+    target_user_id: int
+    vox_amount: int
+    note: Optional[str] = None
+    created_at: datetime
+
+
+class AdminUserOut(BaseModel):
+    id: int
+    email: EmailStr
+    name: str
+    is_admin: bool
+    created_at: datetime
+    balance_vox: int
+    lifetime_vox_credited: int
+    lifetime_vox_consumed: int
+
+
+class AdminAdjustRequest(BaseModel):
+    user_email: EmailStr
+    vox_delta: int = Field(ne=0, ge=-10_000_000, le=10_000_000)
+    note: str = Field(min_length=1, max_length=500)
+
+
+class AdminAdjustResponse(BaseModel):
+    user_email: str
+    vox_delta: int
+    balance_after: int
+    note: str
