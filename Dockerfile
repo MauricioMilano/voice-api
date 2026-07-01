@@ -33,6 +33,16 @@ ARG SIDECAR_REF=main
 RUN git clone --depth 1 --branch ${SIDECAR_REF} ${SIDECAR_REPO} /tmp/voice-chat \
     && cp -r /tmp/voice-chat/sidecar/. /app/sidecar/ \
     && rm -rf /tmp/voice-chat
+
+# ----- local performance patch (CPU-friendly defaults) -----
+# Patches voice-chat/sidecar/stt.py for our deployment:
+#   * beam_size 10 -> 5   (halves decoder work)
+#   * cpu_threads=1        (configurable via env WHISPER_CPU_THREADS)
+# Idempotent - safe on every build.
+COPY scripts/patch-sidecar.py /tmp/patch-sidecar.py
+RUN python3 /tmp/patch-sidecar.py /app/sidecar \
+    && rm /tmp/patch-sidecar.py
+
 RUN pip install --no-cache-dir -r requirements.txt \
     && (pip install --no-cache-dir piper-tts || true)
 
@@ -41,7 +51,9 @@ FROM python:3.11-slim
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    # CPU-friendly STT defaults - override at runtime if needed.
+    WHISPER_CPU_THREADS=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential gcc git curl ca-certificates tini && rm -rf /var/lib/apt/lists/*
