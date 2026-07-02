@@ -50,10 +50,9 @@ export default function Playground() {
     setAudioBlob(null); setAudioBuffer(null); setDuration(0)
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      // Prefer opus in webm; fallback to default if not supported.
-      const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : 'audio/webm'
+      // Plain audio/webm keeps the broadest decoder support. Some browsers
+      // (Safari, older Edge) choke on opus-tagged webm.
+      const mime = 'audio/webm'
       const rec = new MediaRecorder(stream, { mimeType: mime })
       chunksRef.current = []
       rec.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data) }
@@ -63,6 +62,11 @@ export default function Playground() {
         setAudioBlob(blob)
         stream.getTracks().forEach(t => t.stop())
 
+        if (blob.size === 0) {
+          setErr('No audio captured. Check mic permission and try again.')
+          return
+        }
+
         // Decode so we can show real duration and play via Web Audio API.
         // WebM blobs from MediaRecorder don't ship EBML duration metadata,
         // so <audio controls> would show 0:00 even with valid audio.
@@ -70,7 +74,7 @@ export default function Playground() {
           if (!ctxRef.current) ctxRef.current = new AudioContext()
           // decodeAudioData detaches the buffer; pass a copy to be safe.
           const buf = await blob.arrayBuffer()
-          const decoded = await ctxRef.current.decodeAudioData(buf.slice(0))
+          const decoded = await ctxRef.current.decodeAudioData(buf)
           setAudioBuffer(decoded)
           setDuration(decoded.duration)
           console.log('[playground] decoded duration:', decoded.duration.toFixed(2), 's')
@@ -79,9 +83,12 @@ export default function Playground() {
           setErr('Recorded audio could not be decoded: ' + (decErr?.message || decErr))
         }
       }
-      // 100ms timeslice: chunks stream during recording (Safari-friendly,
-      // avoids onstop/onavailable race).
-      rec.start(100)
+      // No timeslice: dataavailable fires ONCE on stop() with a single,
+      // self-contained webm blob. Using timeslice fragments the stream into
+      // multiple webm files concatenated together, which decodeAudioData
+      // rejects. The custom Web Audio player below doesn't need streaming
+      // chunks - it just needs one valid blob to decode.
+      rec.start()
       mediaRef.current = rec
       setRecording(true)
       recStartRef.current = performance.now()
