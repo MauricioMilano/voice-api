@@ -1,0 +1,20 @@
+# GPU override for docker-compose.
+# Use: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+# Or:  docker compose --profile gpu up -d   (if you adopt profiles in main compose)
+#
+# Why a separate file:
+#   docker-compose doesn't support env var interpolation in `deploy.resources`.
+#   This file is the explicit, version-controlled way to toggle GPU passthrough.
+#   On hosts without `nvidia-container-toolkit` installed, this file will
+#   cause `docker compose up` to fail loudly - which is the right behavior
+#   (you don't want to silently fall back to CPU if you thought you had GPU).
+
+services:
+  voice-api:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

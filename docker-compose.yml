@@ -20,7 +20,15 @@ services:
       SIDECAR_BASE_URL: "http://127.0.0.1:8001"
       SIDECAR_TIMEOUT_SECONDS: "180"
       CORS_ORIGINS: "http://localhost:8080,http://127.0.0.1:8080"
-      STT_MODEL: "whisper-large-v3-turbo"
+      STT_MODEL: "whisper-small"
+      # Idle-eviction: release Whisper model from RAM after N seconds of disuse.
+      # 0 disables eviction. Default 300s (~5 min). Cold-start ~2-5s after idle.
+      WHISPER_IDLE_EVICTION_SECONDS: "${WHISPER_IDLE_EVICTION_SECONDS:-300}"
+      # Whisper device: "auto" probes GPU once at startup and locks the result.
+      # "cuda" forces GPU (errors out if unavailable). "cpu" forces CPU.
+      # When GPU is enabled below (deploy block), the probe finds it and locks cuda.
+      # On servers without GPU, the probe falls through to cpu automatically.
+      WHISPER_DEVICE: "${WHISPER_DEVICE:-auto}"
       # ---- Logging (see README "Troubleshooting") ----
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"          # DEBUG | INFO | WARNING | ERROR
       LOG_FORMAT: "${LOG_FORMAT:-text}"        # text | json
@@ -30,11 +38,11 @@ services:
     volumes:
       - ./data:/app/data
       - ./sidecar-data/voices:/app/sidecar/voices
-    # For NVIDIA GPU acceleration, also uncomment the deploy block:
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
+    # GPU acceleration is opt-in via the `gpu` profile. Use:
+    #   docker compose up -d                     # CPU only (default)
+    #   docker compose --profile gpu up -d       # GPU via NVIDIA runtime
+    # The `gpu` profile is the explicit switch - no env var hack needed
+    # because docker-compose doesn't support env interpolation in
+    # `deploy.resources`. On hosts without `nvidia-container-toolkit`
+    # installed, the gpu profile will fail loudly at `docker compose up`,
+    # which is the right behavior (no silent CPU fallback at the docker level).

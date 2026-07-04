@@ -3,7 +3,7 @@
 A self-hosted API gateway for the **voice-chat** sidecar
 ([MauricioMilano/voice-chat](https://github.com/MauricioMilano/voice-chat)).
 
-- **STT**: `whisper-large-v3-turbo` via `faster-whisper` (PT-BR out of the box)
+- **STT**: `whisper-small` via `faster-whisper` (PT-BR out of the box; tuned for low RAM)
 - **TTS**: `piper-tts` with multiple Brazilian voices
 - **Dashboard**: React + Vite + TailwindCSS — auth, API key management, usage analytics, playground, docs
 - **Auth**: dashboard endpoints use JWT; voice endpoints (`/v1/*`) use `X-API-Key`
@@ -41,7 +41,7 @@ curl -s -X POST http://localhost:8080/api/keys \
 curl -X POST http://localhost:8080/v1/stt \
   -H "X-API-Key: vk_live_..._..." \
   -F "audio=@sample.webm"
-# → {"text":"...","words":[...],"model":"whisper-large-v3-turbo",...}
+# → {"text":"...","words":[...],"model":"whisper-small",...}
 ```
 
 ---
@@ -56,10 +56,10 @@ curl -X POST http://localhost:8080/v1/stt \
 │  │  sidecar    │◀─────────▶│  gateway (FastAPI :8080)    │  │
 │  │  :8001      │           │  - /api/auth, /api/keys,    │  │
 │  │  whisper-   │           │    /api/usage               │  │
-│  │  turbo-v3   │           │  - /v1/stt, /v1/tts         │  │
-│  │  + piper    │           │  - /docs, /redoc            │  │
-│  └─────────────┘           │  - serves React SPA (/)     │  │
-│                            └─────────────────────────────┘  │
+│  │  small +    │           │  - /v1/stt, /v1/tts         │  │
+│  │  idle-evict │           │  - /docs, /redoc            │  │
+│  │  + piper    │           │  - serves React SPA (/)     │  │
+│  └─────────────┘           └─────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
                        ▲
                        │  X-API-Key  /  Bearer JWT
@@ -139,7 +139,8 @@ All settings come from env vars (see `backend/.env.example`):
 | `SIDECAR_BASE_URL`           | `http://127.0.0.1:8001`                       |
 | `SIDECAR_TIMEOUT_SECONDS`    | `120`                                         |
 | `CORS_ORIGINS`               | `http://localhost:8080`                       |
-| `STT_MODEL`                  | `whisper-large-v3-turbo` (informational)      |
+| `STT_MODEL`                  | `whisper-small` (informational — model actually loaded by the sidecar) |
+| `WHISPER_IDLE_EVICTION_SECONDS` | `300` — release Whisper from RAM after N s idle. `0` disables. |
 
 For production, swap SQLite for Postgres and put a reverse proxy in front.
 
@@ -147,23 +148,45 @@ For production, swap SQLite for Postgres and put a reverse proxy in front.
 
 ## GPU
 
-The default image runs sidecar on CPU (works on any host).
-For ~5-10× speedup on STT, enable NVIDIA passthrough:
+The sidecar auto-detects CUDA at startup and **locks the device** (no per-request probe).
+Works on any host:
 
-```yaml
-# docker-compose.yml
-services:
-  voice-api:
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+- **GPU available** (NVIDIA + nvidia-container-toolkit) -> uses CUDA, falls back to CPU only if CUDA init fails at runtime
+- **CPU only** -> locks to CPU, no retry/probe overhead
+
+Override with `WHISPER_DEVICE=auto|cuda|cpu` (env var inside the container).
+
+### Toggling GPU
+
+`docker compose` doesn't support env var interpolation in `deploy.resources`, so
+GPU passthrough is opt-in via a separate override file:
+
+```bash
+# CPU only (default, no GPU toolkit required)
+docker compose up -d
+
+# GPU (requires nvidia-container-toolkit on the host)
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
 ```
 
-Requires `nvidia-container-toolkit` on the host.
+`docker-compose.gpu.yml` only adds the `deploy.resources.reservations.devices`
+block - the service definition, ports, volumes, and env vars are inherited
+from the base `docker-compose.yml`. If the host doesn't have the NVIDIA
+toolkit, the second command fails loudly at `docker compose up` (the right
+behavior - you don't want to silently think you have GPU when you don't).
+
+### Benchmarks (RTX 3060, whisper-small INT8)
+
+| Scenario | Latency |
+|---|---|
+| Warm STT (10s audio) | ~95ms (median), 4ms stdev |
+| Cold start (post-idle-eviction reload) | ~1.5s |
+| VRAM resident | ~2.5 GB |
+
+The cold-start cost is the trade-off for the idle-eviction RAM savings: 1.5s
+to reload the model after 15+ minutes of disuse. Disable eviction with
+`WHISPER_IDLE_EVICTION_SECONDS=0` if you want the model pinned in VRAM.
+
 
 ---
 

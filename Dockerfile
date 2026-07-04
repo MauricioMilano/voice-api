@@ -36,8 +36,10 @@ RUN git clone --depth 1 --branch ${SIDECAR_REF} ${SIDECAR_REPO} /tmp/voice-chat 
 
 # ----- local performance patch (CPU-friendly defaults) -----
 # Patches voice-chat/sidecar/stt.py for our deployment:
-#   * beam_size 10 -> 5   (halves decoder work)
-#   * cpu_threads=1        (configurable via env WHISPER_CPU_THREADS)
+#   * model_size default large-v3-turbo -> small   (~250 MB resident vs ~800 MB)
+#   * beam_size 10 -> 5                            (halves decoder work)
+#   * cpu_threads=1                                (configurable via env WHISPER_CPU_THREADS)
+#   * idle-eviction (env WHISPER_IDLE_EVICTION_SECONDS, default 300s)
 # Idempotent - safe on every build.
 COPY scripts/patch-sidecar.py /tmp/patch-sidecar.py
 RUN python3 /tmp/patch-sidecar.py /app/sidecar \
@@ -53,7 +55,10 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     # CPU-friendly STT defaults - override at runtime if needed.
-    WHISPER_CPU_THREADS=1
+    WHISPER_CPU_THREADS=1 \
+    # Idle-eviction (seconds): release Whisper model from RAM after N seconds of disuse.
+    # 0 disables. Default 300. Trade-off: ~2-5s cold-start after idle window.
+    WHISPER_IDLE_EVICTION_SECONDS=300
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential gcc git curl ca-certificates tini && rm -rf /var/lib/apt/lists/*

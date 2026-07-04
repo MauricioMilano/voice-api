@@ -24,7 +24,7 @@ class Settings(BaseSettings):
 
     cors_origins: str = "http://localhost:8080,http://127.0.0.1:8080"
 
-    stt_model: str = "whisper-large-v3-turbo"
+    stt_model: str = "whisper-small"  # small: ~250 MB RAM resident, >95% PT-BR accuracy
 
     @property
     def cors_origin_list(self) -> List[str]:
