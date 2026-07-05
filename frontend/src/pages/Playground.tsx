@@ -21,6 +21,7 @@ export default function Playground() {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [recordingMs, setRecordingMs] = useState(0)
+  const [transcribeMs, setTranscribeMs] = useState(0)
 
   const mediaRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
@@ -30,6 +31,8 @@ export default function Playground() {
   const pausedAtRef = useRef(0)      // offset (in seconds) where playback paused
   const recStartRef = useRef(0)      // wall-clock ms when recording started
   const recTimerRef = useRef<number | null>(null)
+  const transStartRef = useRef(0)
+  const transTimerRef = useRef<number | null>(null)
   const rafRef = useRef<number | null>(null)
 
   useEffect(() => { Keys.list().then(setKeys).catch(() => null) }, [])
@@ -41,6 +44,7 @@ export default function Playground() {
   useEffect(() => () => {
     if (rafRef.current != null) cancelAnimationFrame(rafRef.current)
     if (recTimerRef.current != null) window.clearInterval(recTimerRef.current)
+    if (transTimerRef.current != null) window.clearInterval(transTimerRef.current)
     try { sourceRef.current?.stop() } catch {}
     ctxRef.current?.close().catch(() => null)
   }, [])
@@ -189,12 +193,23 @@ export default function Playground() {
       return
     }
     setBusy(true); setErr(null); setResult('')
+    transStartRef.current = performance.now()
+    setTranscribeMs(0)
+    transTimerRef.current = window.setInterval(() => {
+      setTranscribeMs(performance.now() - transStartRef.current)
+    }, 100)
     try {
       const out = await Voice.stt(apiKey, audioBlob)
       setResult(out.text)
     } catch (e: any) {
       setErr(e?.message || 'Transcription failed')
-    } finally { setBusy(false) }
+    } finally {
+      setBusy(false)
+      if (transTimerRef.current != null) {
+        window.clearInterval(transTimerRef.current)
+        transTimerRef.current = null
+      }
+    }
   }
 
   return (
@@ -232,7 +247,7 @@ export default function Playground() {
               </button>
             )}
           <button className="btn-secondary" disabled={!audioBlob || busy} onClick={transcribe}>
-            {busy ? 'Transcribing…' : 'Transcribe'}
+            {busy ? `Transcribing… ${(transcribeMs / 1000).toFixed(1)}s` : 'Transcribe'}
           </button>
           {audioBlob && !recording && (
             <button className="btn-secondary" onClick={reset}>Reset</button>
